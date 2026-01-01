@@ -4,9 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import "./chat/chat.css";
 
-// ✅ Use env var on Render, fallback to localhost for dev
+// ✅ Use env var on Render, fallback to Render backend URL, then localhost for dev
 const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:4000";
+  process.env.NEXT_PUBLIC_SOCKET_URL ||
+  "https://omeegle-clone-1.onrender.com" ||
+  "http://localhost:4000";
 
 export default function ChatPage() {
   const socketRef = useRef(null);
@@ -79,7 +81,7 @@ export default function ChatPage() {
     return pc;
   }
 
-  async function startWebRTCAsCaller(myPartnerId) {
+  async function startWebRTCAsCaller() {
     await ensureLocalMedia();
     const pc = createPeerConnection();
 
@@ -188,11 +190,10 @@ export default function ChatPage() {
 
       try {
         if (myId && otherId && myId < otherId) {
-          await startWebRTCAsCaller(otherId);
+          await startWebRTCAsCaller();
         }
         // else: wait for offer
       } catch {
-        // If cam/mic blocked
         alert("Camera/Mic blocked. Allow permissions and try again.");
       }
     });
@@ -401,11 +402,7 @@ export default function ChatPage() {
             placeholder={status === "matched" ? "Type a message…" : "Match first…"}
             disabled={status !== "matched"}
           />
-          <button
-            className="btn"
-            onClick={sendMessage}
-            disabled={status !== "matched"}
-          >
+          <button className="btn" onClick={sendMessage} disabled={status !== "matched"}>
             Send
           </button>
         </div>
