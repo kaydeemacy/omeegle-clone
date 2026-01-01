@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
-import "./chat.css";
+import "./chat/chat.css";
 
 /**
  * 🔧 CHANGE THIS ONLY IF YOUR BACKEND URL CHANGES
