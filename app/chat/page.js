@@ -51,11 +51,15 @@ export default function ChatPage() {
   const [micOn, setMicOn] = useState(true);
   const [videoReady, setVideoReady] = useState(false);
 
-  // ✅ NEW: NSFW safety blur (remote video starts blurred)
+  // ✅ NSFW safety blur (remote video starts blurred)
   const [remoteBlurred, setRemoteBlurred] = useState(true);
 
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
+
+  // ✅ IMPORTANT: socket URL (works locally + on Render)
+  const SOCKET_URL =
+    process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:4000";
 
   // ---- dark mode save/load ----
   useEffect(() => {
@@ -80,7 +84,12 @@ export default function ChatPage() {
     return ctx;
   }
 
-  function playBeep({ freq = 740, durationMs = 70, volume = 0.05, type = "sine" }) {
+  function playBeep({
+    freq = 740,
+    durationMs = 70,
+    volume = 0.05,
+    type = "sine",
+  }) {
     if (!soundOn) return;
     try {
       const ctx = getAudioCtx();
@@ -93,7 +102,10 @@ export default function ChatPage() {
       const t = ctx.currentTime;
       gain.gain.setValueAtTime(0.0001, t);
       gain.gain.exponentialRampToValueAtTime(volume, t + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + durationMs / 1000);
+      gain.gain.exponentialRampToValueAtTime(
+        0.0001,
+        t + durationMs / 1000
+      );
 
       osc.connect(gain);
       gain.connect(ctx.destination);
@@ -181,7 +193,8 @@ export default function ChatPage() {
     });
 
     pc.onicecandidate = (e) => {
-      if (e.candidate) socketRef.current?.emit("webrtc:ice", { candidate: e.candidate });
+      if (e.candidate)
+        socketRef.current?.emit("webrtc:ice", { candidate: e.candidate });
     };
 
     pc.ontrack = (e) => {
@@ -208,7 +221,9 @@ export default function ChatPage() {
     const pc = createPeerConnection();
 
     const stream = localStreamRef.current;
-    const already = new Set(pc.getSenders().map((s) => s.track?.id).filter(Boolean));
+    const already = new Set(
+      pc.getSenders().map((s) => s.track?.id).filter(Boolean)
+    );
     stream.getTracks().forEach((track) => {
       if (!already.has(track.id)) pc.addTrack(track, stream);
     });
@@ -217,7 +232,10 @@ export default function ChatPage() {
     const iAmCaller = myId && partnerId ? myId < partnerId : false;
 
     if (iAmCaller) {
-      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+      });
       await pc.setLocalDescription(offer);
       socketRef.current?.emit("webrtc:offer", { sdp: pc.localDescription });
     }
@@ -256,7 +274,7 @@ export default function ChatPage() {
 
   // ---------- Socket setup ----------
   useEffect(() => {
-    const socket = io("http://localhost:4000", {
+    const socket = io(SOCKET_URL, {
       transports: ["websocket", "polling"],
     });
 
@@ -282,7 +300,6 @@ export default function ChatPage() {
       setPartnerTyping(false);
       setLastTypingEvent("matched (reset)");
 
-      // ✅ NSFW blur ON at the start of every match
       setRemoteBlurred(true);
 
       try {
@@ -364,7 +381,7 @@ export default function ChatPage() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [SOCKET_URL]);
 
   // Typing tick only on false -> true
   useEffect(() => {
@@ -529,7 +546,9 @@ export default function ChatPage() {
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <span className={`badge onlineBadge ${onlineGlow ? "onlineGlow" : ""}`}>
             Online:{" "}
-            <b className={onlineBump ? "onlineNumber bump" : "onlineNumber"}>{onlineCount}</b>
+            <b className={onlineBump ? "onlineNumber bump" : "onlineNumber"}>
+              {onlineCount}
+            </b>
           </span>
 
           <span className={`badge ${connected ? "ok" : "bad"}`}>
@@ -549,30 +568,49 @@ export default function ChatPage() {
       <div className="card">
         <div className="controls">
           {status === "idle" && (
-            <button className="btn" onClick={findPartner}>Start</button>
+            <button className="btn" onClick={findPartner}>
+              Start
+            </button>
           )}
 
           {status === "waiting" && (
             <>
-              <button className="btn" onClick={findPartner}>Matching…</button>
-              <button className="btn secondary" onClick={stop}>Stop</button>
+              <button className="btn" onClick={findPartner}>
+                Matching…
+              </button>
+              <button className="btn secondary" onClick={stop}>
+                Stop
+              </button>
             </>
           )}
 
           {status === "left" && (
             <>
-              <button className="btn" onClick={next}>Next</button>
-              <button className="btn secondary" onClick={stop}>Stop</button>
+              <button className="btn" onClick={next}>
+                Next
+              </button>
+              <button className="btn secondary" onClick={stop}>
+                Stop
+              </button>
             </>
           )}
 
           {status === "matched" && (
             <>
-              <button className="btn" onClick={next}>Next</button>
-              <button className="btn secondary" onClick={stop}>Stop</button>
-              <button className="btn secondary" onClick={report}>Report</button>
+              <button className="btn" onClick={next}>
+                Next
+              </button>
+              <button className="btn secondary" onClick={stop}>
+                Stop
+              </button>
+              <button className="btn secondary" onClick={report}>
+                Report
+              </button>
 
-              <button className="btn secondary" onClick={() => setSoundOn((v) => !v)}>
+              <button
+                className="btn secondary"
+                onClick={() => setSoundOn((v) => !v)}
+              >
                 Sound: {soundOn ? "On" : "Off"}
               </button>
 
@@ -584,9 +622,10 @@ export default function ChatPage() {
                 Cam: {camOn ? "On" : "Off"}
               </button>
 
-              <button className="btn secondary" onClick={retryVideo}>Retry Video</button>
+              <button className="btn secondary" onClick={retryVideo}>
+                Retry Video
+              </button>
 
-              {/* ✅ NEW: NSFW safety blur toggle for remote video */}
               <button
                 className="btn secondary"
                 onClick={() => setRemoteBlurred((v) => !v)}
@@ -609,13 +648,18 @@ export default function ChatPage() {
         <div className="videoGrid" style={{ marginBottom: 12 }}>
           <div className="videoCard">
             <div className="videoLabel">You</div>
-            <video ref={localVideoRef} autoPlay playsInline muted className="videoEl" />
+            <video
+              ref={localVideoRef}
+              autoPlay
+              playsInline
+              muted
+              className="videoEl"
+            />
           </div>
 
           <div className="videoCard">
             <div className="videoLabel">Stranger</div>
 
-            {/* ✅ Blur is applied via class */}
             <video
               ref={remoteVideoRef}
               autoPlay
@@ -623,12 +667,16 @@ export default function ChatPage() {
               className={`videoEl ${remoteBlurred ? "nsfwBlur" : ""}`}
             />
 
-            {/* ✅ Overlay hint + quick reveal */}
             {remoteBlurred && (
               <div className="nsfwOverlay">
                 <div className="nsfwTitle">⚠️ Safety Blur</div>
-                <div className="nsfwText">Stranger video is blurred. Tap reveal if you want to view.</div>
-                <button className="btn secondary nsfwBtn" onClick={() => setRemoteBlurred(false)}>
+                <div className="nsfwText">
+                  Stranger video is blurred. Tap reveal if you want to view.
+                </div>
+                <button
+                  className="btn secondary nsfwBtn"
+                  onClick={() => setRemoteBlurred(false)}
+                >
                   Reveal Video
                 </button>
               </div>
@@ -652,7 +700,9 @@ export default function ChatPage() {
 
           {showTypingUi && (
             <span className={`typingWrap ${partnerTyping ? "show" : ""}`}>
-              <span className="typing">Stranger is typing{typingDots}</span>
+              <span className="typing">
+                Stranger is typing{typingDots}
+              </span>
             </span>
           )}
         </div>
@@ -677,7 +727,9 @@ export default function ChatPage() {
           <input
             className="input"
             value={message}
-            placeholder={status === "matched" ? "Type a message…" : "Match first…"}
+            placeholder={
+              status === "matched" ? "Type a message…" : "Match first…"
+            }
             disabled={status !== "matched"}
             onChange={(e) => {
               setMessage(e.target.value);
@@ -686,7 +738,11 @@ export default function ChatPage() {
             onKeyDown={(e) => e.key === "Enter" && sendMessage()}
           />
 
-          <button className="btn" onClick={sendMessage} disabled={status !== "matched"}>
+          <button
+            className="btn"
+            onClick={sendMessage}
+            disabled={status !== "matched"}
+          >
             Send
           </button>
         </div>
