@@ -4,41 +4,29 @@ import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import "./chat/chat.css";
 
-/**
- * 🔧 CHANGE THIS ONLY IF YOUR BACKEND URL CHANGES
- * This MUST be your Render backend URL
- */
-const SOCKET_URL = "https://omeegle-clone.onrender.com";
+// ✅ Use env var on Render, fallback to localhost for dev
+const SOCKET_URL =
+  process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:4000";
 
 export default function ChatPage() {
   const socketRef = useRef(null);
   const bottomRef = useRef(null);
-  const typingTimeoutRef = useRef(null);
-  const dotsIntervalRef = useRef(null);
 
   // WebRTC refs
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
-  const remoteStreamRef = useRef(null);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
 
   // UI state
   const [connected, setConnected] = useState(false);
-  const [status, setStatus] = useState("idle");
+  const [status, setStatus] = useState("idle"); // idle | waiting | matched | left
   const [roomId, setRoomId] = useState(null);
   const [partnerId, setPartnerId] = useState(null);
 
   const [darkMode, setDarkMode] = useState(false);
   const [onlineCount, setOnlineCount] = useState(0);
-
-  const [partnerTyping, setPartnerTyping] = useState(false);
-  const [typingDots, setTypingDots] = useState("");
-
-  const [camOn, setCamOn] = useState(true);
-  const [micOn, setMicOn] = useState(true);
-  const [videoReady, setVideoReady] = useState(false);
 
   // ✅ NSFW safety blur
   const [remoteBlurred, setRemoteBlurred] = useState(true);
@@ -46,11 +34,130 @@ export default function ChatPage() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
 
-  // ---------------- SOCKET SETUP ----------------
+  // ---------------- WebRTC helpers ----------------
+  async function ensureLocalMedia() {
+    if (localStreamRef.current) return localStreamRef.current;
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: true,
+    });
+
+    localStreamRef.current = stream;
+
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = stream;
+      localVideoRef.current.muted = true;
+      await localVideoRef.current.play?.().catch(() => {});
+    }
+
+    return stream;
+  }
+
+  function createPeerConnection() {
+    if (pcRef.current) return pcRef.current;
+
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        socketRef.current?.emit("webrtc:ice", { candidate: e.candidate });
+      }
+    };
+
+    pc.ontrack = (e) => {
+      const remoteStream = e.streams?.[0];
+      if (remoteStream && remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStream;
+        remoteVideoRef.current.play?.().catch(() => {});
+      }
+    };
+
+    pcRef.current = pc;
+    return pc;
+  }
+
+  async function startWebRTCAsCaller(myPartnerId) {
+    await ensureLocalMedia();
+    const pc = createPeerConnection();
+
+    // Add tracks once
+    const stream = localStreamRef.current;
+    const existing = new Set(
+      pc.getSenders().map((s) => s.track?.id).filter(Boolean)
+    );
+
+    stream.getTracks().forEach((t) => {
+      if (!existing.has(t.id)) pc.addTrack(t, stream);
+    });
+
+    // Caller creates offer
+    const offer = await pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true,
+    });
+    await pc.setLocalDescription(offer);
+    socketRef.current?.emit("webrtc:offer", { sdp: pc.localDescription });
+  }
+
+  async function handleOffer(sdp) {
+    // Callee path
+    await ensureLocalMedia();
+    const pc = createPeerConnection();
+
+    // Add tracks once
+    const stream = localStreamRef.current;
+    const existing = new Set(
+      pc.getSenders().map((s) => s.track?.id).filter(Boolean)
+    );
+
+    stream.getTracks().forEach((t) => {
+      if (!existing.has(t.id)) pc.addTrack(t, stream);
+    });
+
+    await pc.setRemoteDescription(sdp);
+
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    socketRef.current?.emit("webrtc:answer", { sdp: pc.localDescription });
+  }
+
+  async function handleAnswer(sdp) {
+    const pc = pcRef.current;
+    if (!pc) return;
+    await pc.setRemoteDescription(sdp);
+  }
+
+  async function handleIce(candidate) {
+    const pc = pcRef.current;
+    if (!pc) return;
+    try {
+      await pc.addIceCandidate(candidate);
+    } catch {}
+  }
+
+  function cleanupVideo() {
+    try {
+      pcRef.current?.close();
+    } catch {}
+    pcRef.current = null;
+
+    try {
+      localStreamRef.current?.getTracks()?.forEach((t) => t.stop());
+    } catch {}
+    localStreamRef.current = null;
+
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+  }
+
+  // ---------------- Socket setup ----------------
   useEffect(() => {
     const socket = io(SOCKET_URL, {
-      transports: ["websocket"],
-      secure: true,
+      transports: ["websocket", "polling"],
     });
 
     socketRef.current = socket;
@@ -58,143 +165,177 @@ export default function ChatPage() {
     socket.on("connect", () => setConnected(true));
     socket.on("disconnect", () => {
       setConnected(false);
-      cleanupVideo();
+      setStatus("idle");
+      setRoomId(null);
+      setPartnerId(null);
       setRemoteBlurred(true);
+      cleanupVideo();
     });
 
-    socket.on("online:count", (n) => setOnlineCount(n));
-
+    socket.on("online:count", (n) => setOnlineCount(Number(n) || 0));
     socket.on("status", (s) => setStatus(s));
 
     socket.on("matched", async ({ roomId, partnerId }) => {
       setRoomId(roomId);
-      setPartnerId(partnerId);
+      setPartnerId(partnerId || null);
       setStatus("matched");
       setMessages([]);
       setRemoteBlurred(true);
-      await startWebRTC();
+
+      // Decide caller by socket id string compare
+      const myId = socket.id || "";
+      const otherId = partnerId || "";
+
+      try {
+        if (myId && otherId && myId < otherId) {
+          await startWebRTCAsCaller(otherId);
+        }
+        // else: wait for offer
+      } catch {
+        // If cam/mic blocked
+        alert("Camera/Mic blocked. Allow permissions and try again.");
+      }
     });
 
-    socket.on("typing", ({ isTyping }) => setPartnerTyping(isTyping));
-
-    socket.on("chat:message", (msg) =>
-      setMessages((prev) => [...prev, msg])
-    );
+    socket.on("chat:message", (msg) => {
+      setMessages((prev) => [...prev, msg]);
+    });
 
     socket.on("partner_left", () => {
       setStatus("left");
-      cleanupVideo();
+      setRoomId(null);
+      setPartnerId(null);
       setRemoteBlurred(true);
+      cleanupVideo();
     });
 
+    // WebRTC signaling
     socket.on("webrtc:offer", async ({ sdp }) => handleOffer(sdp));
     socket.on("webrtc:answer", async ({ sdp }) => handleAnswer(sdp));
-    socket.on("webrtc:ice", async ({ candidate }) =>
-      pcRef.current?.addIceCandidate(candidate)
-    );
+    socket.on("webrtc:ice", async ({ candidate }) => handleIce(candidate));
+    socket.on("webrtc:hangup", () => {
+      setRemoteBlurred(true);
+      cleanupVideo();
+    });
 
-    return () => socket.disconnect();
+    socket.on("banned", ({ until }) => {
+      alert("You are blocked until: " + new Date(until).toLocaleString());
+      setRemoteBlurred(true);
+      cleanupVideo();
+      socket.disconnect();
+    });
+
+    return () => {
+      socket.disconnect();
+      cleanupVideo();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---------------- WEBRTC ----------------
-  async function startWebRTC() {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true,
-    });
+  // Auto-scroll chat
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
-    localStreamRef.current = stream;
-    localVideoRef.current.srcObject = stream;
-    localVideoRef.current.muted = true;
-
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    });
-
-    pcRef.current = pc;
-
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
-
-    pc.ontrack = (e) => {
-      remoteVideoRef.current.srcObject = e.streams[0];
-      setVideoReady(true);
-    };
-
-    pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        socketRef.current.emit("webrtc:ice", { candidate: e.candidate });
-      }
-    };
-
-    if (socketRef.current.id < partnerId) {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socketRef.current.emit("webrtc:offer", { sdp: offer });
-    }
-  }
-
-  async function handleOffer(sdp) {
-    await startWebRTC();
-    await pcRef.current.setRemoteDescription(sdp);
-    const answer = await pcRef.current.createAnswer();
-    await pcRef.current.setLocalDescription(answer);
-    socketRef.current.emit("webrtc:answer", { sdp: answer });
-  }
-
-  async function handleAnswer(sdp) {
-    await pcRef.current.setRemoteDescription(sdp);
-  }
-
-  function cleanupVideo() {
-    pcRef.current?.close();
-    pcRef.current = null;
-    localStreamRef.current?.getTracks().forEach((t) => t.stop());
-    localStreamRef.current = null;
-    remoteVideoRef.current.srcObject = null;
-    localVideoRef.current.srcObject = null;
-    setVideoReady(false);
-  }
-
-  // ---------------- CHAT ----------------
+  // ---------------- Actions ----------------
   function sendMessage() {
-    if (!message.trim()) return;
-    socketRef.current.emit("chat:message", {
-      roomId,
-      message: message.trim(),
-    });
+    if (!roomId) return;
+    const text = message.trim();
+    if (!text) return;
+
+    socketRef.current?.emit("chat:message", { roomId, message: text });
     setMessage("");
   }
 
   function findPartner() {
+    setRemoteBlurred(true);
     cleanupVideo();
-    socketRef.current.emit("find");
     setStatus("waiting");
+    socketRef.current?.emit("find");
   }
 
   function next() {
+    setRemoteBlurred(true);
     cleanupVideo();
-    socketRef.current.emit("leave");
-    socketRef.current.emit("find");
+    socketRef.current?.emit("leave");
     setStatus("waiting");
+    setRoomId(null);
+    setPartnerId(null);
+    setMessages([]);
+    socketRef.current?.emit("find");
+  }
+
+  function stop() {
+    setRemoteBlurred(true);
+    cleanupVideo();
+    socketRef.current?.emit("leave");
+    setStatus("idle");
+    setRoomId(null);
+    setPartnerId(null);
+    setMessages([]);
   }
 
   return (
     <div className={`wrap ${darkMode ? "dark" : ""}`}>
       <div className="topbar">
-        <h1>Omegle-ish</h1>
-        <span className="badge onlineBadge">Online: {onlineCount}</span>
+        <h1 style={{ margin: 0 }}>Omegle-ish</h1>
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <span className="badge onlineBadge">Online: {onlineCount}</span>
+
+          <span className={`badge ${connected ? "ok" : "bad"}`}>
+            {connected ? "Connected ✅" : "Not connected ❌"}
+          </span>
+
+          <button
+            className="btn secondary toggleBtn"
+            onClick={() => setDarkMode((v) => !v)}
+          >
+            {darkMode ? "Light" : "Dark"} Mode
+          </button>
+        </div>
       </div>
 
       <div className="card">
         <div className="controls">
-          {status !== "matched" && (
+          {status === "idle" && (
             <button className="btn" onClick={findPartner}>
               Start
             </button>
           )}
+
+          {status === "waiting" && (
+            <>
+              <button className="btn" onClick={findPartner}>
+                Matching…
+              </button>
+              <button className="btn secondary" onClick={stop}>
+                Stop
+              </button>
+            </>
+          )}
+
+          {status === "left" && (
+            <>
+              <button className="btn" onClick={next}>
+                Next
+              </button>
+              <button className="btn secondary" onClick={stop}>
+                Stop
+              </button>
+            </>
+          )}
+
           {status === "matched" && (
             <>
-              <button className="btn" onClick={next}>Next</button>
+              <button className="btn" onClick={next}>
+                Next
+              </button>
+
+              <button className="btn secondary" onClick={stop}>
+                Stop
+              </button>
+
               <button
                 className="btn secondary"
                 onClick={() => setRemoteBlurred((v) => !v)}
@@ -205,10 +346,10 @@ export default function ChatPage() {
           )}
         </div>
 
-        <div className="videoGrid">
+        <div className="videoGrid" style={{ marginTop: 12 }}>
           <div className="videoCard">
             <div className="videoLabel">You</div>
-            <video ref={localVideoRef} autoPlay playsInline />
+            <video ref={localVideoRef} autoPlay playsInline className="videoEl" />
           </div>
 
           <div className="videoCard">
@@ -217,28 +358,56 @@ export default function ChatPage() {
               ref={remoteVideoRef}
               autoPlay
               playsInline
-              className={remoteBlurred ? "nsfwBlur" : ""}
+              className={`videoEl ${remoteBlurred ? "nsfwBlur" : ""}`}
             />
+
+            {remoteBlurred && (
+              <div className="nsfwOverlay">
+                <div className="nsfwTitle">⚠️ Safety Blur</div>
+                <div className="nsfwText">
+                  Stranger video is blurred. Tap reveal if you want to view.
+                </div>
+                <button
+                  className="btn secondary nsfwBtn"
+                  onClick={() => setRemoteBlurred(false)}
+                >
+                  Reveal Video
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="chatbox">
-          {messages.map((m, i) => (
-            <div key={i} className={`row ${m.from === socketRef.current.id ? "me" : "them"}`}>
-              <div className="bubble">{m.message}</div>
-            </div>
-          ))}
+        <div className="chatbox" style={{ marginTop: 12 }}>
+          {messages.map((m, i) => {
+            const isMe = m?.from && m.from === socketRef.current?.id;
+            return (
+              <div key={i} className={`row ${isMe ? "me" : "them"}`}>
+                <div className={`bubble ${isMe ? "me" : ""}`}>
+                  {m?.message || ""}
+                </div>
+              </div>
+            );
+          })}
           <div ref={bottomRef} />
         </div>
 
         <div className="inputRow">
           <input
+            className="input"
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-            placeholder="Type a message…"
+            placeholder={status === "matched" ? "Type a message…" : "Match first…"}
+            disabled={status !== "matched"}
           />
-          <button className="btn" onClick={sendMessage}>Send</button>
+          <button
+            className="btn"
+            onClick={sendMessage}
+            disabled={status !== "matched"}
+          >
+            Send
+          </button>
         </div>
       </div>
     </div>

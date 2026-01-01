@@ -3,30 +3,46 @@ const http = require("http");
 const { Server } = require("socket.io");
 
 const app = express();
+
+// ✅ health endpoints
+app.get("/", (req, res) => res.send("Socket backend is running ✅"));
+app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
+
 const server = http.createServer(app);
 
-// ✅ Render / production: set this on Render as your frontend URL
-// Example: https://your-frontend.onrender.com
-const FRONTEND_URL = process.env.FRONTEND_URL || "";
+/**
+ * ✅ FRONTEND URL(s)
+ * Put your FRONTEND Render URL in Render ENV:
+ *   FRONTEND_URL=https://omeegle-clone-1.onrender.com
+ *
+ * Optional:
+ *   FRONTEND_URLS=https://omeegle-clone-1.onrender.com,https://another-frontend.onrender.com
+ */
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+const FRONTEND_URLS = process.env.FRONTEND_URLS || "";
 
-// ✅ Allow both dev + production origins
-const allowedOrigins = [
+// build allowed origins list
+const ALLOWED_ORIGINS = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
   FRONTEND_URL,
-].filter(Boolean);
+  ...FRONTEND_URLS.split(",").map((s) => s.trim()).filter(Boolean),
+];
 
+// ✅ socket.io with CORS
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin(origin, cb) {
+      // allow non-browser clients / server-to-server calls (no origin)
+      if (!origin) return cb(null, true);
+
+      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+
+      return cb(new Error("CORS blocked: " + origin), false);
+    },
     methods: ["GET", "POST"],
     credentials: true,
   },
-});
-
-// ✅ Simple health check (test backend online in browser)
-app.get("/health", (req, res) => {
-  res.json({ ok: true, online: io.of("/").sockets.size });
 });
 
 // --- Config ---
@@ -37,21 +53,17 @@ const shouldBanIp = process.env.NODE_ENV === "production";
 const partnerMap = new Map(); // socket.id -> partner socket.id
 const ipBySocketId = new Map(); // socket.id -> ip
 const bannedIpUntil = new Map(); // ip -> timestamp (ms)
-
-// user prefs + waiting pools
 const prefsBySocketId = new Map(); // socket.id -> { country, interest }
 const waitingPools = new Map(); // key -> [socketId, ...]
 
-// ✅ Broadcast online count to everyone
 function broadcastOnlineCount() {
   const count = io.of("/").sockets.size;
   io.emit("online:count", count);
 }
 
-// Helpers
 function cleanCountry(country) {
   if (typeof country !== "string") return "";
-  return country.trim().toUpperCase().slice(0, 2); // ISO 2-letter code e.g. NG, US
+  return country.trim().toUpperCase().slice(0, 2);
 }
 function cleanInterest(interest) {
   if (typeof interest !== "string") return "";
@@ -104,19 +116,15 @@ io.on("connection", (socket) => {
 
   console.log("User connected:", socket.id, "ip:", ip);
 
-  // online count
   socket.emit("online:count", io.of("/").sockets.size);
   broadcastOnlineCount();
 
-  // ✅ Find partner with filters
-  // client emits: socket.emit("find", { country, interest })
   socket.on("find", ({ country, interest } = {}) => {
     removeFromWaiting(socket.id);
     endChat(socket.id);
 
     const c = cleanCountry(country);
     const i = cleanInterest(interest);
-
     prefsBySocketId.set(socket.id, { country: c, interest: i });
 
     const key = poolKey(c, i);
@@ -141,7 +149,6 @@ io.on("connection", (socket) => {
       socket.join(roomId);
       partnerSocket.join(roomId);
 
-      // ✅ send partnerId + partner country to each side
       const myPrefs = prefsBySocketId.get(socket.id) || {};
       const partnerPrefs = prefsBySocketId.get(partnerId) || {};
 
@@ -160,25 +167,19 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // no match yet -> enqueue
     alive.push(socket.id);
     waitingPools.set(key, alive);
-
     socket.emit("status", "waiting");
   });
 
-  // Typing indicator
   socket.on("typing", ({ isTyping }) => {
     const partnerId = partnerMap.get(socket.id);
     if (!partnerId) return;
 
     const partnerSocket = io.sockets.sockets.get(partnerId);
-    if (!partnerSocket) return;
-
-    partnerSocket.emit("typing", { isTyping: !!isTyping });
+    partnerSocket?.emit("typing", { isTyping: !!isTyping });
   });
 
-  // Chat messages
   socket.on("chat:message", ({ roomId, message }) => {
     if (typeof message !== "string") return;
 
@@ -188,14 +189,12 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("chat:message", { from: socket.id, message: clean });
   });
 
-  // Leave chat
   socket.on("leave", () => {
     removeFromWaiting(socket.id);
     endChat(socket.id);
     socket.emit("status", "idle");
   });
 
-  // Report partner
   socket.on("report", ({ roomId, reason }) => {
     console.log("REPORT RECEIVED 🚨", { from: socket.id, roomId, reason });
 
@@ -205,8 +204,8 @@ io.on("connection", (socket) => {
     endChat(socket.id);
 
     const partnerSocket = io.sockets.sockets.get(partnerId);
-
     const partnerIp = ipBySocketId.get(partnerId);
+
     if (shouldBanIp && partnerIp) {
       const until = Date.now() + BAN_MS;
       bannedIpUntil.set(partnerIp, until);
@@ -232,9 +231,8 @@ io.on("connection", (socket) => {
   });
 });
 
-// ✅ Render needs process.env.PORT
+// ✅ Render requires PORT from env
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
   console.log("Server running on port", PORT);
-  if (FRONTEND_URL) console.log("Allowed frontend:", FRONTEND_URL);
 });
