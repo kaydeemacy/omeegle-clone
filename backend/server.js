@@ -4,46 +4,50 @@ const { Server } = require("socket.io");
 
 const app = express();
 
-// ✅ health endpoints
+/* -------------------- Health endpoints -------------------- */
 app.get("/", (req, res) => res.send("Socket backend is running ✅"));
 app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
 
 const server = http.createServer(app);
 
-/**
- * ✅ FRONTEND URL(s)
- * Put your FRONTEND Render URL in Render ENV:
- *   FRONTEND_URL=https://omeegle-clone-1.onrender.com
- *
- * Optional:
- *   FRONTEND_URLS=https://omeegle-clone-1.onrender.com,https://another-frontend.onrender.com
- */
+/* -------------------- CORS (Frontend allowlist) --------------------
+Render ENV you should set:
+
+FRONTEND_URL=https://omeegle-clone-1.onrender.com
+
+(Optional) if you have more than one frontend:
+FRONTEND_URLS=https://omeegle-clone-1.onrender.com,https://another.onrender.com
+------------------------------------------------------------------- */
+
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 const FRONTEND_URLS = process.env.FRONTEND_URLS || "";
 
-// build allowed origins list
+const extra = FRONTEND_URLS.split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const ALLOWED_ORIGINS = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
   FRONTEND_URL,
-  ...FRONTEND_URLS.split(",").map((s) => s.trim()).filter(Boolean),
+  ...extra,
 ];
 
-// ✅ socket.io with CORS
+console.log("✅ Allowed CORS origins:", ALLOWED_ORIGINS);
+
 const io = new Server(server, {
   cors: {
     origin(origin, cb) {
-      // allow non-browser clients / server-to-server calls (no origin)
       if (!origin) return cb(null, true);
-
       if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-
       return cb(new Error("CORS blocked: " + origin), false);
     },
     methods: ["GET", "POST"],
     credentials: true,
   },
 });
+
+/* -------------------- App logic -------------------- */
 
 // --- Config ---
 const BAN_MS = 10 * 60 * 1000; // 10 minutes
@@ -97,6 +101,13 @@ function endChat(socketId) {
   }
 }
 
+// ✅ helper: get partner socket quickly
+function getPartnerSocket(socketId) {
+  const partnerId = partnerMap.get(socketId);
+  if (!partnerId) return null;
+  return io.sockets.sockets.get(partnerId) || null;
+}
+
 io.on("connection", (socket) => {
   const ip =
     socket.handshake.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
@@ -119,6 +130,7 @@ io.on("connection", (socket) => {
   socket.emit("online:count", io.of("/").sockets.size);
   broadcastOnlineCount();
 
+  /* -------------------- MATCHING -------------------- */
   socket.on("find", ({ country, interest } = {}) => {
     removeFromWaiting(socket.id);
     endChat(socket.id);
@@ -173,10 +185,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("typing", ({ isTyping }) => {
-    const partnerId = partnerMap.get(socket.id);
-    if (!partnerId) return;
-
-    const partnerSocket = io.sockets.sockets.get(partnerId);
+    const partnerSocket = getPartnerSocket(socket.id);
     partnerSocket?.emit("typing", { isTyping: !!isTyping });
   });
 
@@ -218,6 +227,30 @@ io.on("connection", (socket) => {
     partnerSocket?.disconnect(true);
   });
 
+  /* -------------------- ✅ WEBRTC SIGNALING (THIS FIXES VIDEO) -------------------- */
+  socket.on("webrtc:offer", ({ sdp }) => {
+    const partnerSocket = getPartnerSocket(socket.id);
+    if (!partnerSocket) return;
+    partnerSocket.emit("webrtc:offer", { sdp });
+  });
+
+  socket.on("webrtc:answer", ({ sdp }) => {
+    const partnerSocket = getPartnerSocket(socket.id);
+    if (!partnerSocket) return;
+    partnerSocket.emit("webrtc:answer", { sdp });
+  });
+
+  socket.on("webrtc:ice", ({ candidate }) => {
+    const partnerSocket = getPartnerSocket(socket.id);
+    if (!partnerSocket) return;
+    partnerSocket.emit("webrtc:ice", { candidate });
+  });
+
+  socket.on("webrtc:hangup", () => {
+    const partnerSocket = getPartnerSocket(socket.id);
+    partnerSocket?.emit("webrtc:hangup");
+  });
+
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
 
@@ -231,8 +264,8 @@ io.on("connection", (socket) => {
   });
 });
 
-// ✅ Render requires PORT from env
+/* -------------------- Render PORT -------------------- */
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("✅ Socket server running on port", PORT);
 });
