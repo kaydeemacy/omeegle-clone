@@ -6,9 +6,7 @@ import "./chat/chat.css";
 
 // ✅ Use env var on Render, fallback to Render backend URL, then localhost for dev
 const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL ||
-  "https://omeegle-clone-1.onrender.com" ||
-  "http://localhost:4000";
+  process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:4000";
 
 export default function ChatPage() {
   const socketRef = useRef(null);
