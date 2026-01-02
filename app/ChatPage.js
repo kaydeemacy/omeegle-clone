@@ -41,12 +41,12 @@ export default function ChatPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [onlineCount, setOnlineCount] = useState(0);
 
-  // ✅ NEW: country + interests
-  const [myCountry, setMyCountry] = useState("NG"); // default Nigeria (change if you want)
+  // ✅ country + interests
+  const [myCountry, setMyCountry] = useState("NG");
   const [interest, setInterest] = useState("");
   const [partnerCountry, setPartnerCountry] = useState("");
 
-  // ✅ bring back mic/cam/sound + typing UI
+  // ✅ mic/cam/sound + typing UI
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
   const [soundOn, setSoundOn] = useState(true);
@@ -60,9 +60,11 @@ export default function ChatPage() {
   const [messages, setMessages] = useState([]);
 
   // -------------------- FULL SCREEN DARK MODE --------------------
-  // Instead of only styling .wrap, we also theme the whole page
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+    document.documentElement.setAttribute(
+      "data-theme",
+      darkMode ? "dark" : "light"
+    );
   }, [darkMode]);
 
   // dots animation for typing
@@ -134,12 +136,17 @@ export default function ChatPage() {
     const pc = createPeerConnection();
 
     const stream = localStreamRef.current;
-    const existing = new Set(pc.getSenders().map((s) => s.track?.id).filter(Boolean));
+    const existing = new Set(
+      pc.getSenders().map((s) => s.track?.id).filter(Boolean)
+    );
     stream.getTracks().forEach((t) => {
       if (!existing.has(t.id)) pc.addTrack(t, stream);
     });
 
-    const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+    const offer = await pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true,
+    });
     await pc.setLocalDescription(offer);
     socketRef.current?.emit("webrtc:offer", { sdp: pc.localDescription });
   }
@@ -149,7 +156,9 @@ export default function ChatPage() {
     const pc = createPeerConnection();
 
     const stream = localStreamRef.current;
-    const existing = new Set(pc.getSenders().map((s) => s.track?.id).filter(Boolean));
+    const existing = new Set(
+      pc.getSenders().map((s) => s.track?.id).filter(Boolean)
+    );
     stream.getTracks().forEach((t) => {
       if (!existing.has(t.id)) pc.addTrack(t, stream);
     });
@@ -195,6 +204,7 @@ export default function ChatPage() {
     socketRef.current = socket;
 
     socket.on("connect", () => setConnected(true));
+
     socket.on("disconnect", () => {
       setConnected(false);
       setStatus("idle");
@@ -234,23 +244,23 @@ export default function ChatPage() {
 
     socket.on("chat:message", (msg) => {
       setMessages((prev) => [...prev, msg]);
-      if (!msg?.from || msg.from !== socket.id) {
-        if (soundOn) {
-          try {
-            const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const o = ctx.createOscillator();
-            const g = ctx.createGain();
-            o.frequency.value = 660;
-            g.gain.value = 0.03;
-            o.connect(g);
-            g.connect(ctx.destination);
-            o.start();
-            setTimeout(() => {
-              o.stop();
-              ctx.close();
-            }, 90);
-          } catch {}
-        }
+
+      // receive sound (light beep)
+      if (soundOn && msg?.from && msg.from !== socket.id) {
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.frequency.value = 660;
+          g.gain.value = 0.03;
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.start();
+          setTimeout(() => {
+            o.stop();
+            ctx.close();
+          }, 90);
+        } catch {}
       }
     });
 
@@ -283,8 +293,9 @@ export default function ChatPage() {
       socket.disconnect();
       cleanupVideo();
     };
+    // IMPORTANT: do NOT depend on soundOn/camOn/micOn — would recreate socket & drop calls
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [soundOn, camOn, micOn]);
+  }, []);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -331,7 +342,10 @@ export default function ChatPage() {
     setPartnerCountry("");
     setPartnerTyping(false);
     setMessages([]);
-    socketRef.current?.emit("find", { country: myCountry, interest: interest.trim() });
+    socketRef.current?.emit("find", {
+      country: myCountry,
+      interest: interest.trim(),
+    });
   }
 
   function stop() {
@@ -361,7 +375,10 @@ export default function ChatPage() {
   }
 
   const myFlag = useMemo(() => flagEmojiFromCode(myCountry), [myCountry]);
-  const partnerFlag = useMemo(() => flagEmojiFromCode(partnerCountry), [partnerCountry]);
+  const partnerFlag = useMemo(
+    () => flagEmojiFromCode(partnerCountry),
+    [partnerCountry]
+  );
 
   return (
     <div className="page">
@@ -382,13 +399,19 @@ export default function ChatPage() {
           <h1 style={{ margin: 0 }}>Omegle-ish</h1>
 
           <div className="topRight">
-            <span className="badge onlineBadge">Online: <b>{onlineCount}</b></span>
+            <span className="badge onlineBadge">
+              Online: <b>{onlineCount}</b>
+            </span>
 
             <span className={`badge ${connected ? "ok" : "bad"}`}>
               {connected ? "Connected ✅" : "Not connected ❌"}
             </span>
 
-            <button className="btn secondary toggleBtn" onClick={() => setDarkMode((v) => !v)}>
+            <button
+              type="button"
+              className="btn secondary toggleBtn"
+              onClick={() => setDarkMode((v) => !v)}
+            >
               {darkMode ? "Light" : "Dark"} Mode
             </button>
           </div>
@@ -403,7 +426,9 @@ export default function ChatPage() {
               <input
                 className="input small"
                 value={myCountry}
-                onChange={(e) => setMyCountry(e.target.value.toUpperCase().slice(0, 2))}
+                onChange={(e) =>
+                  setMyCountry(e.target.value.toUpperCase().slice(0, 2))
+                }
                 placeholder="NG"
                 maxLength={2}
               />
@@ -423,50 +448,84 @@ export default function ChatPage() {
 
           <div className="filterBox">
             <div className="filterLabel">Match</div>
-            <button className="btn" onClick={findPartner} disabled={!connected || status === "waiting"}>
+            <button
+              type="button"
+              className="btn"
+              onClick={findPartner}
+              disabled={!connected || status === "waiting"}
+            >
               {status === "waiting" ? "Matching…" : "Start"}
             </button>
           </div>
         </div>
 
         <div className="card">
+          {/* ✅ IMPORTANT: all buttons are type="button" so they don't break WebRTC */}
           <div className="controls">
             {status === "idle" && (
-              <button className="btn" onClick={findPartner}>Start</button>
+              <button type="button" className="btn" onClick={findPartner}>
+                Start
+              </button>
             )}
 
             {status === "waiting" && (
               <>
-                <button className="btn" onClick={findPartner}>Matching…</button>
-                <button className="btn secondary" onClick={stop}>Stop</button>
+                <button type="button" className="btn" onClick={findPartner}>
+                  Matching…
+                </button>
+                <button type="button" className="btn secondary" onClick={stop}>
+                  Stop
+                </button>
               </>
             )}
 
             {status === "left" && (
               <>
-                <button className="btn" onClick={next}>Next</button>
-                <button className="btn secondary" onClick={stop}>Stop</button>
+                <button type="button" className="btn" onClick={next}>
+                  Next
+                </button>
+                <button type="button" className="btn secondary" onClick={stop}>
+                  Stop
+                </button>
               </>
             )}
 
             {status === "matched" && (
               <>
-                <button className="btn" onClick={next}>Next</button>
-                <button className="btn secondary" onClick={stop}>Stop</button>
+                <button type="button" className="btn" onClick={next}>
+                  Next
+                </button>
 
-                <button className="btn secondary" onClick={() => setSoundOn((v) => !v)}>
+                <button type="button" className="btn secondary" onClick={stop}>
+                  Stop
+                </button>
+
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={() => setSoundOn((v) => !v)}
+                >
                   Sound: {soundOn ? "On" : "Off"}
                 </button>
 
-                <button className="btn secondary" onClick={toggleMic}>
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={toggleMic}
+                >
                   Mic: {micOn ? "On" : "Off"}
                 </button>
 
-                <button className="btn secondary" onClick={toggleCam}>
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={toggleCam}
+                >
                   Cam: {camOn ? "On" : "Off"}
                 </button>
 
                 <button
+                  type="button"
                   className="btn secondary"
                   onClick={() => setRemoteBlurred((v) => !v)}
                   title="Blur/unblur stranger video"
@@ -487,8 +546,12 @@ export default function ChatPage() {
           {/* ✅ flags */}
           {status === "matched" && (
             <div className="flagsRow">
-              <span className="flagPill">You: {myFlag} <b>{myCountry}</b></span>
-              <span className="flagPill">Stranger: {partnerFlag} <b>{partnerCountry || "??"}</b></span>
+              <span className="flagPill">
+                You: {myFlag} <b>{myCountry}</b>
+              </span>
+              <span className="flagPill">
+                Stranger: {partnerFlag} <b>{partnerCountry || "??"}</b>
+              </span>
             </div>
           )}
 
@@ -504,7 +567,13 @@ export default function ChatPage() {
           <div className="videoGrid">
             <div className="videoCard">
               <div className="videoLabel">You</div>
-              <video ref={localVideoRef} autoPlay playsInline muted className="videoEl" />
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="videoEl"
+              />
             </div>
 
             <div className="videoCard">
@@ -519,8 +588,14 @@ export default function ChatPage() {
               {remoteBlurred && (
                 <div className="nsfwOverlay">
                   <div className="nsfwTitle">⚠️ Safety Blur</div>
-                  <div className="nsfwText">Stranger video is blurred. Tap reveal if you want to view.</div>
-                  <button className="btn secondary nsfwBtn" onClick={() => setRemoteBlurred(false)}>
+                  <div className="nsfwText">
+                    Stranger video is blurred. Tap reveal if you want to view.
+                  </div>
+                  <button
+                    type="button"
+                    className="btn secondary nsfwBtn"
+                    onClick={() => setRemoteBlurred(false)}
+                  >
                     Reveal Video
                   </button>
                 </div>
@@ -534,7 +609,9 @@ export default function ChatPage() {
               const isMe = m?.from && m.from === socketRef.current?.id;
               return (
                 <div key={i} className={`row ${isMe ? "me" : "them"}`}>
-                  <div className={`bubble ${isMe ? "me" : ""}`}>{m?.message || ""}</div>
+                  <div className={`bubble ${isMe ? "me" : ""}`}>
+                    {m?.message || ""}
+                  </div>
                 </div>
               );
             })}
@@ -553,7 +630,12 @@ export default function ChatPage() {
               }}
               onKeyDown={(e) => e.key === "Enter" && sendMessage()}
             />
-            <button className="btn" onClick={sendMessage} disabled={status !== "matched"}>
+            <button
+              type="button"
+              className="btn"
+              onClick={sendMessage}
+              disabled={status !== "matched"}
+            >
               Send
             </button>
           </div>
