@@ -46,11 +46,25 @@ export default function ChatPage() {
   const [typingDots, setTypingDots] = useState("");
   const [showTypingUi, setShowTypingUi] = useState(false);
 
+  // ✅ Country + interest (filters)
+  const [country, setCountry] = useState("any"); // "any" or "NG"/"US"/etc
+  const [interest, setInterest] = useState(""); // free text
+
   // ✅ NSFW safety blur
   const [remoteBlurred, setRemoteBlurred] = useState(true);
 
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
+
+  // ---- helpers to clean inputs (match backend behavior) ----
+  function cleanCountry(c) {
+    if (!c || c === "any") return "";
+    return String(c).trim().toUpperCase().slice(0, 2);
+  }
+  function cleanInterest(i) {
+    if (!i) return "";
+    return String(i).trim().toLowerCase().slice(0, 40);
+  }
 
   // ---------------- Audio helpers ----------------
   function getAudioCtx() {
@@ -137,9 +151,7 @@ export default function ChatPage() {
     });
 
     pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        socketRef.current?.emit("webrtc:ice", { candidate: e.candidate });
-      }
+      if (e.candidate) socketRef.current?.emit("webrtc:ice", { candidate: e.candidate });
     };
 
     pc.ontrack = (e) => {
@@ -158,7 +170,6 @@ export default function ChatPage() {
     await ensureLocalMedia();
     const pc = createPeerConnection();
 
-    // Add tracks once
     const stream = localStreamRef.current;
     const existing = new Set(pc.getSenders().map((s) => s.track?.id).filter(Boolean));
 
@@ -178,7 +189,6 @@ export default function ChatPage() {
     await ensureLocalMedia();
     const pc = createPeerConnection();
 
-    // Add tracks once
     const stream = localStreamRef.current;
     const existing = new Set(pc.getSenders().map((s) => s.track?.id).filter(Boolean));
 
@@ -253,7 +263,6 @@ export default function ChatPage() {
       setPartnerTyping(false);
       setRemoteBlurred(true);
 
-      // Caller selection: lowest socket.id becomes caller
       const myId = socket.id || "";
       const otherId = partnerId || "";
 
@@ -261,16 +270,12 @@ export default function ChatPage() {
         if (myId && otherId && myId < otherId) {
           await startWebRTCAsCaller();
         }
-        // else: wait for offer
       } catch {
         alert("Camera/Mic blocked. Allow permissions and try again.");
       }
     });
 
-    // ✅ Restored typing
-    socket.on("typing", ({ isTyping }) => {
-      setPartnerTyping(!!isTyping);
-    });
+    socket.on("typing", ({ isTyping }) => setPartnerTyping(!!isTyping));
 
     socket.on("chat:message", (msg) => {
       const isMe = msg?.from && msg.from === socketRef.current?.id;
@@ -287,7 +292,6 @@ export default function ChatPage() {
       cleanupVideo();
     });
 
-    // WebRTC signaling
     socket.on("webrtc:offer", async ({ sdp }) => handleOffer(sdp));
     socket.on("webrtc:answer", async ({ sdp }) => handleAnswer(sdp));
     socket.on("webrtc:ice", async ({ candidate }) => handleIce(candidate));
@@ -317,7 +321,6 @@ export default function ChatPage() {
   }, []);
 
   // ---------------- Typing UI (dots + fade) ----------------
-  // Typing tick sound only on false -> true
   useEffect(() => {
     const was = prevPartnerTypingRef.current;
     if (!was && partnerTyping) playTypingTick();
@@ -325,7 +328,6 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partnerTyping]);
 
-  // Fade typing UI
   useEffect(() => {
     if (partnerTyping) {
       setShowTypingUi(true);
@@ -335,7 +337,6 @@ export default function ChatPage() {
     return () => clearTimeout(t);
   }, [partnerTyping]);
 
-  // Dots animation
   useEffect(() => {
     if (dotsIntervalRef.current) {
       clearInterval(dotsIntervalRef.current);
@@ -391,13 +392,18 @@ export default function ChatPage() {
     setMessage("");
   }
 
+  // ✅ IMPORTANT: send country + interest to backend
   function findPartner() {
     setRemoteBlurred(true);
     setPartnerTyping(false);
     emitTyping(false);
     cleanupVideo();
     setStatus("waiting");
-    socketRef.current?.emit("find");
+
+    socketRef.current?.emit("find", {
+      country: cleanCountry(country),
+      interest: cleanInterest(interest),
+    });
   }
 
   function next() {
@@ -405,12 +411,18 @@ export default function ChatPage() {
     setPartnerTyping(false);
     emitTyping(false);
     cleanupVideo();
+
     socketRef.current?.emit("leave");
+
     setStatus("waiting");
     setRoomId(null);
     setPartnerId(null);
     setMessages([]);
-    socketRef.current?.emit("find");
+
+    socketRef.current?.emit("find", {
+      country: cleanCountry(country),
+      interest: cleanInterest(interest),
+    });
   }
 
   function stop() {
@@ -418,18 +430,18 @@ export default function ChatPage() {
     setPartnerTyping(false);
     emitTyping(false);
     cleanupVideo();
+
     socketRef.current?.emit("leave");
+
     setStatus("idle");
     setRoomId(null);
     setPartnerId(null);
     setMessages([]);
   }
 
-  // ✅ Restored: mic/cam toggles
   function toggleMic() {
     const stream = localStreamRef.current;
     const next = !micOn;
-
     if (stream) stream.getAudioTracks().forEach((t) => (t.enabled = next));
     setMicOn(next);
   }
@@ -437,7 +449,6 @@ export default function ChatPage() {
   function toggleCam() {
     const stream = localStreamRef.current;
     const next = !camOn;
-
     if (stream) stream.getVideoTracks().forEach((t) => (t.enabled = next));
     setCamOn(next);
   }
@@ -447,7 +458,7 @@ export default function ChatPage() {
       <div className="topbar">
         <h1 style={{ margin: 0 }}>Omegle-ish</h1>
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <span className="badge onlineBadge">Online: {onlineCount}</span>
 
           <span className={`badge ${connected ? "ok" : "bad"}`}>
@@ -461,7 +472,45 @@ export default function ChatPage() {
       </div>
 
       <div className="card">
-        <div className="controls">
+        {/* ✅ Filters UI (country + interest) */}
+        <div className="controls" style={{ gap: 10, flexWrap: "wrap" }}>
+          <label className="badge" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            Country:
+            <select
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+              className="input"
+              style={{ width: 140 }}
+              disabled={status === "matched" || status === "waiting"}
+              title="Pick a country (optional)"
+            >
+              <option value="any">Any</option>
+              <option value="NG">NG</option>
+              <option value="US">US</option>
+              <option value="GB">GB</option>
+              <option value="CA">CA</option>
+              <option value="DE">DE</option>
+              <option value="FR">FR</option>
+              <option value="ZA">ZA</option>
+              <option value="GH">GH</option>
+              <option value="KE">KE</option>
+            </select>
+          </label>
+
+          <label className="badge" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            Interest:
+            <input
+              className="input"
+              value={interest}
+              onChange={(e) => setInterest(e.target.value)}
+              placeholder="e.g. music, football..."
+              style={{ width: 220 }}
+              disabled={status === "matched" || status === "waiting"}
+              title="Match by interest (optional)"
+            />
+          </label>
+
+          {/* Main controls */}
           {status === "idle" && (
             <button className="btn" onClick={findPartner}>
               Start
@@ -525,11 +574,7 @@ export default function ChatPage() {
 
         {/* Typing UI */}
         <div className="debugText" style={{ minHeight: 20, marginTop: 10 }}>
-          {showTypingUi && (
-            <span className="typing">
-              Stranger is typing{typingDots}
-            </span>
-          )}
+          {showTypingUi && <span className="typing">Stranger is typing{typingDots}</span>}
         </div>
 
         <div className="videoGrid" style={{ marginTop: 12 }}>
@@ -551,9 +596,7 @@ export default function ChatPage() {
             {remoteBlurred && (
               <div className="nsfwOverlay">
                 <div className="nsfwTitle">⚠️ Safety Blur</div>
-                <div className="nsfwText">
-                  Stranger video is blurred. Tap reveal if you want to view.
-                </div>
+                <div className="nsfwText">Stranger video is blurred. Tap reveal if you want to view.</div>
                 <button className="btn secondary nsfwBtn" onClick={() => setRemoteBlurred(false)}>
                   Reveal Video
                 </button>
